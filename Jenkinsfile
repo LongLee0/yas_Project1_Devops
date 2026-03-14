@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     stages {
-        // --- STAGE 1: QUÉT BẢO MẬT TỔNG THỂ (Snyk chạy 1 lần ở đầu) ---
+        // --- STAGE 1: QUÉT BẢO MẬT TỔNG THỂ ---
         stage('Global Security Scan') {
             steps {
                 script {
@@ -10,27 +10,20 @@ pipeline {
                     docker.image('zricethezav/gitleaks:latest').inside('--entrypoint=""') {
                         sh 'gitleaks detect --source="." --no-git --verbose || true'
                     }
-
-                    // echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Full Project) ==='
-                    // // Quét toàn bộ để lấy kết quả tổng quan trước khi đi vào từng service
-                    // withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-                    //     docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
-                    //         sh 'snyk test --all-projects --token=$SNYK_TOKEN --exclude=recommendation,backoffice,storefront || true'
-                    //     }
-                    // }
                 }
             }
         }
 
-        // --- STAGE 2: CHUẨN BỊ POM GỐC (Để fix lỗi ${revision}) ---
+        // --- STAGE 2: CHUẨN BỊ POM GỐC ---
         stage('Prepare Root & Commons') {
             steps {
                 echo '=== Cài đặt cấu hình gốc và thư viện dùng chung ==='
                 script {
-                    // Sửa mount point: -v .m2repo:/tmp/.m2
-                    docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v ${env.WORKSPACE}/.m2repo:/tmp/.m2") {
-                        sh 'mvn install -N -Drevision=1.0-SNAPSHOT -Dmaven.repo.local=/tmp/.m2/repository'
-                        sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am -Dmaven.repo.local=/tmp/.m2/repository'
+                    // FIX: Đổi từ thư mục vật lý sang Named Volume 'yas-m2-cache' để tránh lỗi quyền ghi
+                    docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v yas-m2-cache:/m2repo") {
+                        // FIX: Dẫn repo vào đúng volume /m2repo
+                        sh 'mvn install -N -Drevision=1.0-SNAPSHOT -Dmaven.repo.local=/m2repo'
+                        sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am -Dmaven.repo.local=/m2repo'
                     }
                 }
             }
@@ -39,71 +32,22 @@ pipeline {
         // --- STAGE 3: QUY TRÌNH CI TUẦN TỰ ---
         stage('Business Services CI') {
             stages {
-                // Chạy tuần tự từng service để tránh quá tải RAM và xung đột file
-                stage('Service: Customer') {
-                    when { changeset "customer/**" }
-                    steps { runServiceCI('customer') }
-                }
-                stage('Service: Product') {
-                    when { changeset "product/**" }
-                    steps { runServiceCI('product') }
-                }
-                stage('Service: Cart') {
-                    when { changeset "cart/**" }
-                    steps { runServiceCI('cart') }
-                }
-                stage('Service: Order') {
-                    when { changeset "order/**" }
-                    steps { runServiceCI('order') }
-                }
-                stage('Service: Media') {
-                    when { changeset "media/**" }
-                    steps { runServiceCI('media') }
-                }
-                stage('Service: Rating') {
-                    when { changeset "rating/**" }
-                    steps { runServiceCI('rating') }
-                }
-                stage('Service: Location') {
-                    when { changeset "location/**" }
-                    steps { runServiceCI('location') }
-                }
-                stage('Service: Inventory') {
-                    when { changeset "inventory/**" }
-                    steps { runServiceCI('inventory') }
-                }
-                stage('Service: Tax') {
-                    when { changeset "tax/**" }
-                    steps { runServiceCI('tax') }
-                }
-                stage('Service: Search') {
-                    when { changeset "search/**" }
-                    steps { runServiceCI('search') }
-                }
-                stage('Service: Payment') {
-                    when { changeset "payment/**" }
-                    steps { runServiceCI('payment') }
-                }
-                stage('Service: Promotion') {
-                    when { changeset "promotion/**" }
-                    steps { runServiceCI('promotion') }
-                }
-                stage('Service: Backoffice-BFF') {
-                    when { changeset "backoffice-bff/**" }
-                    steps { runServiceCI('backoffice-bff') }
-                }
-                stage('Service: Storefront-BFF') {
-                    when { changeset "storefront-bff/**" }
-                    steps { runServiceCI('storefront-bff') }
-                }
-                stage('Service: Sampledata') {
-                    when { changeset "sampledata/**" }
-                    steps { runServiceCI('sampledata') }
-                }
-                stage('Service: payment-paypal') {
-                    when { changeset "payment-paypal/**" }
-                    steps { runServiceCI('payment-paypal') }
-                }
+                stage('Service: Customer') { when { changeset "customer/**" }; steps { runServiceCI('customer') } }
+                stage('Service: Product') { when { changeset "product/**" }; steps { runServiceCI('product') } }
+                stage('Service: Cart') { when { changeset "cart/**" }; steps { runServiceCI('cart') } }
+                stage('Service: Order') { when { changeset "order/**" }; steps { runServiceCI('order') } }
+                stage('Service: Media') { when { changeset "media/**" }; steps { runServiceCI('media') } }
+                stage('Service: Rating') { when { changeset "rating/**" }; steps { runServiceCI('rating') } }
+                stage('Service: Location') { when { changeset "location/**" }; steps { runServiceCI('location') } }
+                stage('Service: Inventory') { when { changeset "inventory/**" }; steps { runServiceCI('inventory') } }
+                stage('Service: Tax') { when { changeset "tax/**" }; steps { runServiceCI('tax') } }
+                stage('Service: Search') { when { changeset "search/**" }; steps { runServiceCI('search') } }
+                stage('Service: Payment') { when { changeset "payment/**" }; steps { runServiceCI('payment') } }
+                stage('Service: Promotion') { when { changeset "promotion/**" }; steps { runServiceCI('promotion') } }
+                stage('Service: Backoffice-BFF') { when { changeset "backoffice-bff/**" }; steps { runServiceCI('backoffice-bff') } }
+                stage('Service: Storefront-BFF') { when { changeset "storefront-bff/**" }; steps { runServiceCI('storefront-bff') } }
+                stage('Service: Sampledata') { when { changeset "sampledata/**" }; steps { runServiceCI('sampledata') } }
+                stage('Service: payment-paypal') { when { changeset "payment-paypal/**" }; steps { runServiceCI('payment-paypal') } }
             }
         }
     }
@@ -122,16 +66,16 @@ pipeline {
 // --- HÀM HỖ TRỢ XỬ LÝ TỪNG SERVICE ---
 def runServiceCI(String serviceName) {
     script {
-        // Đã sửa: Mount vào /tmp/.m2 để khớp với Stage 2
-        docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v ${env.WORKSPACE}/.m2repo:/tmp/.m2") {
+        // FIX: Phải dùng chung Named Volume 'yas-m2-cache' như ở Stage 2
+        docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v yas-m2-cache:/m2repo") {
             echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
             
             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                // Đã sửa: Thêm -Dmaven.repo.local để Maven tìm thấy thư viện đã build ở Stage 2
+                // FIX: Trỏ repo vào /m2repo
                 sh """mvn install sonar:sonar \
                 -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
                 -DskipITs=true \
-                -Dmaven.repo.local=/tmp/.m2/repository \
+                -Dmaven.repo.local=/m2repo \
                 -Dsonar.token=\$SONAR_TOKEN \
                 -Dsonar.organization=longlee0 \
                 -Dsonar.projectKey=LongLee0_yas_Project1_Devops"""
