@@ -28,8 +28,7 @@ pipeline {
                 echo '=== Cài đặt cấu hình gốc và thư viện dùng chung ==='
                 script {
                     // Sửa mount point: -v .m2repo:/tmp/.m2
-                    docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v .m2repo:/tmp/.m2') {
-                        // Thêm tham số: -Dmaven.repo.local=/tmp/.m2/repository
+                    docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v ${env.WORKSPACE}/.m2repo:/tmp/.m2") {
                         sh 'mvn install -N -Drevision=1.0-SNAPSHOT -Dmaven.repo.local=/tmp/.m2/repository'
                         sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am -Dmaven.repo.local=/tmp/.m2/repository'
                     }
@@ -124,7 +123,7 @@ pipeline {
 def runServiceCI(String serviceName) {
     script {
         // Đã sửa: Mount vào /tmp/.m2 để khớp với Stage 2
-        docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v .m2repo:/tmp/.m2') {
+        docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v ${env.WORKSPACE}/.m2repo:/tmp/.m2") {
             echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
             
             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
