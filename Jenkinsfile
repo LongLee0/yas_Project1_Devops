@@ -19,9 +19,9 @@ pipeline {
             steps {
                 echo '=== Cài đặt cấu hình gốc và thư viện dùng chung ==='
                 script {
-                    // FIX: Đổi từ thư mục vật lý sang Named Volume 'yas-m2-cache' để tránh lỗi quyền ghi
-                    docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v yas-m2-cache:/m2repo") {
-                        // FIX: Dẫn repo vào đúng volume /m2repo
+                    // FIX 1: Thêm -u root và dùng Named Volume 'yas-m2-repo' để đảm quyền ghi file
+                    docker.image('maven:3.9.6-eclipse-temurin-21').inside("-u root -v yas-m2-repo:/m2repo") {
+                        // FIX 2: Ép Maven dùng /m2repo làm kho chứa
                         sh 'mvn install -N -Drevision=1.0-SNAPSHOT -Dmaven.repo.local=/m2repo'
                         sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am -Dmaven.repo.local=/m2repo'
                     }
@@ -66,12 +66,11 @@ pipeline {
 // --- HÀM HỖ TRỢ XỬ LÝ TỪNG SERVICE ---
 def runServiceCI(String serviceName) {
     script {
-        // FIX: Phải dùng chung Named Volume 'yas-m2-cache' như ở Stage 2
-        docker.image('maven:3.9.6-eclipse-temurin-21').inside("-v yas-m2-cache:/m2repo") {
+        // FIX 3: Đồng bộ hóa Volume và User root với Stage 2
+        docker.image('maven:3.9.6-eclipse-temurin-21').inside("-u root -v yas-m2-repo:/m2repo") {
             echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
             
             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                // FIX: Trỏ repo vào /m2repo
                 sh """mvn install sonar:sonar \
                 -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
                 -DskipITs=true \
