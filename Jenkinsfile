@@ -27,10 +27,11 @@ pipeline {
             steps {
                 echo '=== Cài đặt cấu hình gốc và thư viện dùng chung ==='
                 script {
-                    docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v /root/.m2:/root/.m2') {
-                        // Quan trọng: Cài đặt tệp POM cha vào .m2 để các module con không bị lỗi dependency
-                        sh 'mvn install -N -Drevision=1.0-SNAPSHOT'
-                        sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am'
+                    // Sửa mount point: -v .m2repo:/tmp/.m2
+                    docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v .m2repo:/tmp/.m2') {
+                        // Thêm tham số: -Dmaven.repo.local=/tmp/.m2/repository
+                        sh 'mvn install -N -Drevision=1.0-SNAPSHOT -Dmaven.repo.local=/tmp/.m2/repository'
+                        sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am -Dmaven.repo.local=/tmp/.m2/repository'
                     }
                 }
             }
@@ -122,21 +123,22 @@ pipeline {
 // --- HÀM HỖ TRỢ XỬ LÝ TỪNG SERVICE ---
 def runServiceCI(String serviceName) {
     script {
-        docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v /root/.m2:/root/.m2') {
+        // Đã sửa: Mount vào /tmp/.m2 để khớp với Stage 2
+        docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v .m2repo:/tmp/.m2') {
             echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
             
             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                // Tối ưu: Dùng install thay vì verify, skipITs để chạy nhanh hơn
+                // Đã sửa: Thêm -Dmaven.repo.local để Maven tìm thấy thư viện đã build ở Stage 2
                 sh """mvn install sonar:sonar \
                 -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
                 -DskipITs=true \
+                -Dmaven.repo.local=/tmp/.m2/repository \
                 -Dsonar.token=\$SONAR_TOKEN \
                 -Dsonar.organization=longlee0 \
                 -Dsonar.projectKey=LongLee0_yas_Project1_Devops"""
             }
             
             echo "=== Phase: Kiểm tra độ phủ Test > 70% (Yêu cầu 7b) ==="
-            // Chốt chặn 70% theo yêu cầu Project PDF
             jacoco(
                 execPattern: "${serviceName}/target/*.exec",
                 classPattern: "${serviceName}/target/classes",
@@ -144,7 +146,6 @@ def runServiceCI(String serviceName) {
                 inclusionPattern: "**/*.class",
                 minimumInstructionCoverage: '70',
                 maximumInstructionCoverage: '70',
-                
                 buildOverBuild: false,
                 changeBuildStatus: true,
                 skipCopyOfSrcFiles: true 
