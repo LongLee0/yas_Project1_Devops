@@ -16,13 +16,15 @@ pipeline {
                     echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Sequential Scan) ==='
                     def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
 
-                    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+                    withCredentials([
+                        string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN'),
+                        string(credentialsId: 'snyk-org-id', variable: 'SNYK_ORG_ID') // Thêm cái này vào Jenkins Credentials nhé
+                    ]) {
                         for (service in services) {
-                            echo "--- Đang khởi tạo container quét (Cấp 8GB RAM) cho: ${service} ---"
-                            
-                            // CHỈNH SỬA TẠI ĐÂY: Thêm tham số -m 8g và --memory-swap 8g
-                            docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g --memory-swap 8g') {
-                                sh "snyk test -d --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
+                            echo "--- Quét Snyk cho: ${service} ---"
+                            docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g') {
+                                // Thêm cờ --org và --command=mvn để fix lỗi 403 và EACCES
+                                sh "snyk test --token=\$SNYK_TOKEN --org=\$SNYK_ORG_ID --file=${service}/pom.xml --command=mvn || true"
                             }
                         }
                     }
