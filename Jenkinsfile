@@ -13,13 +13,14 @@ pipeline {
                         sh 'gitleaks detect --source="." --no-git --verbose || true'
                     }
 
-                    echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Full Project) ==='
+                    echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Sequential Scan) ==='
                     def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
+
                     withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-                    docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
                         for (service in services) {
-                            echo "--- Quét Snyk cho service: ${service} ---"
-                            sh "snyk test --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
+                            echo "--- Đang khởi tạo container quét cho: ${service} ---"
+                            docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
+                                sh "snyk test --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
                             }
                         }
                     }
