@@ -18,8 +18,10 @@ pipeline {
 
                     withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
                         for (service in services) {
-                            echo "--- Đang khởi tạo container quét cho: ${service} ---"
-                            docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
+                            echo "--- Đang khởi tạo container quét (Cấp 8GB RAM) cho: ${service} ---"
+                            
+                            // CHỈNH SỬA TẠI ĐÂY: Thêm tham số -m 8g và --memory-swap 8g
+                            docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g --memory-swap 8g') {
                                 sh "snyk test --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
                             }
                         }
