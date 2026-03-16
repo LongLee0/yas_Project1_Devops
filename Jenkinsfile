@@ -6,31 +6,39 @@ pipeline {
     stages {
         // --- STAGE 1: QUÉT BẢO MẬT TỔNG THỂ (Snyk chạy 1 lần ở đầu) ---
         stage('Global Security Scan') {
-            steps {
-                script {
-                    echo '=== 1.1 Quét lộ mật khẩu (Gitleaks) ==='
-                    docker.image('zricethezav/gitleaks:latest').inside('--entrypoint=""') {
-                        sh 'gitleaks detect --source="." --no-git --verbose || true'
-                    }
+                    steps {
+                        script {
+                            echo '=== 1.1 Quét lộ mật khẩu (Gitleaks) ==='
+                            docker.image('zricethezav/gitleaks:latest').inside('--entrypoint=""') {
+                                sh 'gitleaks detect --source="." --no-git --verbose || true'
+                            }
 
-                    echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Sequential Scan) ==='
-                    def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
+                            echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Sequential Scan) ==='
+                            def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
 
-                    withCredentials([
-                        string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN'),
-                        string(credentialsId: 'snyk-org-id', variable: 'SNYK_ORG_ID') // Thêm cái này vào Jenkins Credentials nhé
-                    ]) {
-                        for (service in services) {
-                            echo "--- Quét Snyk cho: ${service} ---"
-                            docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g') {
-                                // Thêm cờ --org và --command=mvn để fix lỗi 403 và EACCES
-                                sh "snyk test -d --token=\$SNYK_TOKEN --org=\$SNYK_ORG_ID --file=${service}/pom.xml --command=mvn || true"
+                            // FIX LỖI EACCES: Cấp quyền thực thi cho tất cả file mvnw trong monorepo trước khi quét
+                            sh "find . -name 'mvnw' -exec chmod +x {} +"
+
+                            withCredentials([
+                                string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN'),
+                                string(credentialsId: 'snyk-org-id', variable: 'SNYK_ORG_ID')
+                            ]) {
+                                for (service in services) {
+                                    echo "--- Đang khởi tạo container quét (8GB RAM) cho: ${service} ---"
+                                    
+                                    // Cấp 8GB RAM và tách biệt container cho từng service để giải phóng bộ nhớ ngay sau khi dùng
+                                    docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g --memory-swap 8g') {
+                                        
+                                        // FIX LỖI 403 & EACCES: 
+                                        // 1. --org: Đảm bảo quyền truy cập vào đúng Organization.
+                                        // 2. --command=mvn: Ép Snyk dùng Maven hệ thống trong container thay vì gọi ./mvnw lỗi.
+                                        sh "snyk test --token=\$SNYK_TOKEN --org=\$SNYK_ORG_ID --file=${service}/pom.xml --command=mvn || true"
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
 
         // --- STAGE 2: CHUẨN BỊ POM GỐC ---
         stage('Prepare Root & Commons') {
