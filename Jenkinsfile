@@ -24,7 +24,7 @@ pipeline {
                             echo "--- Quét Snyk cho: ${service} ---"
                             docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g') {
                                 // Thêm cờ --org và --command=mvn để fix lỗi 403 và EACCES
-                                sh "snyk test --token=\$SNYK_TOKEN --org=\$SNYK_ORG_ID --file=${service}/pom.xml --command=mvn || true"
+                                sh "snyk test -d --token=\$SNYK_TOKEN --org=\$SNYK_ORG_ID --file=${service}/pom.xml --command=mvn || true"
                             }
                         }
                     }
