@@ -22,7 +22,7 @@ pipeline {
                             
                             // CHỈNH SỬA TẠI ĐÂY: Thêm tham số -m 8g và --memory-swap 8g
                             docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g --memory-swap 8g') {
-                                sh "snyk test --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
+                                sh "snyk test -d --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
                             }
                         }
                     }
