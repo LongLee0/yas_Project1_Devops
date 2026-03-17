@@ -4,28 +4,37 @@ pipeline {
     agent any
     
     stages {
-        // --- STAGE 1: QUÉT BẢO MẬT TỔNG THỂ (Snyk chạy 1 lần ở đầu) ---
+        // --- STAGE 1: QUÉT BẢO MẬT TỔNG THỂ  ---
         stage('Global Security Scan') {
-            steps {
-                script {
-                    echo '=== 1.1 Quét lộ mật khẩu (Gitleaks) ==='
-                    docker.image('zricethezav/gitleaks:latest').inside('--entrypoint=""') {
-                        sh 'gitleaks detect --source="." --no-git --verbose || true'
-                    }
+                    steps {
+                        script {
+                            echo '=== 1.1 Quét lộ mật khẩu (Gitleaks) ==='
+                            docker.image('zricethezav/gitleaks:latest').inside('--entrypoint=""') {
+                                sh 'gitleaks detect --source="." --no-git --verbose || true'
+                            }
 
-                    echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Full Project) ==='
-                    def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
-                    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-                    docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
-                        for (service in services) {
-                            echo "--- Quét Snyk cho service: ${service} ---"
-                            sh "snyk test --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
+                            echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Sequential Scan) ==='
+                            def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
+
+                            sh "find . -name 'mvnw' -exec chmod +x {} +"
+
+                            withCredentials([
+                                string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN'),
+                                string(credentialsId: 'snyk-org-id', variable: 'SNYK_ORG_ID')
+                            ]) {
+                                for (service in services) {
+                                    echo "--- Đang khởi tạo container quét (8GB RAM) cho: ${service} ---"
+                                    
+                                    docker.image('snyk/snyk:maven').inside('--entrypoint="" -m 8g --memory-swap 8g') {
+                                        
+
+                                        sh "snyk test --token=\$SNYK_TOKEN --org=\$SNYK_ORG_ID --file=${service}/pom.xml --command=mvn || true"
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
 
         // --- STAGE 2: CHUẨN BỊ POM GỐC ---
         stage('Prepare Root & Commons') {
@@ -161,34 +170,6 @@ def runServiceCI(String serviceName) {
             sh """mvn install \
             -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
             -DskipITs=true"""
-            // echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
-            
-            // withCredentials([
-            //     string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
-            //     string(credentialsId: 'sonar-organization', variable: 'SONAR_ORGANIZATION'),
-            //     string(credentialsId: 'sonar-project-key', variable: 'SONAR_PROJECT_KEY')
-            // ]) {
-            //     sh """mvn install sonar:sonar \
-            //     -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
-            //     -DskipITs=true \
-            //     -Dsonar.token=\$SONAR_TOKEN \
-            //     -Dsonar.organization=\$SONAR_ORGANIZATION \
-            //     -Dsonar.projectKey=\$SONAR_PROJECT_KEY"""
-            // }
-            
-            // echo "=== Phase: Kiểm tra độ phủ Test > 70% (Yêu cầu 7b) ==="
-            // jacoco(
-            //     execPattern: "${serviceName}/target/*.exec",
-            //     classPattern: "${serviceName}/target/classes",
-            //     sourcePattern: "${serviceName}/src/main/java",
-            //     inclusionPattern: "**/*.class",
-            //     minimumInstructionCoverage: '70',
-            //     maximumInstructionCoverage: '70',
-                
-            //     buildOverBuild: false,
-            //     changeBuildStatus: true,
-            //     skipCopyOfSrcFiles: true 
-            // )
         }
 
         echo "=== Phase: Build Docker Image cho ${serviceName} ==="
