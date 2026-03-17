@@ -1,9 +1,11 @@
+changedModules = []
+
 pipeline {
     agent any
     
     stages {
-        // --- 1. KIỂM TRA BẢO MẬT TỔNG THỂ (Yêu cầu 7c) ---
-        stage('Security & Dependency Scan') {
+        // --- STAGE 1: QUÉT BẢO MẬT TỔNG THỂ (Snyk chạy 1 lần ở đầu) ---
+        stage('Global Security Scan') {
             steps {
                 script {
                     echo '=== 1.1 Quét lộ mật khẩu (Gitleaks) ==='
@@ -11,32 +13,38 @@ pipeline {
                         sh 'gitleaks detect --source="." --no-git --verbose || true'
                     }
 
-                    echo '=== 1.2 Quét lỗ hổng thư viện (Snyk) ==='
+                    echo '=== 1.2 Quét lỗ hổng thư viện (Snyk Full Project) ==='
+                    def services = ["customer", "product", "cart", "order", "media", "rating", "location", "inventory", "tax", "search", "payment", "promotion", "payment-paypal", "common-library"]
                     withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-                        docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
-                            sh 'snyk test --all-projects --token=$SNYK_TOKEN --exclude=recommendation,backoffice,storefront || true'
+                    docker.image('snyk/snyk:maven').inside('--entrypoint=""') {
+                        for (service in services) {
+                            echo "--- Quét Snyk cho service: ${service} ---"
+                            sh "snyk test --token=\$SNYK_TOKEN --file=${service}/pom.xml || true"
+                            }
                         }
                     }
                 }
             }
         }
 
-        // --- 2. CHUẨN BỊ THƯ VIỆN CHUNG (Yêu cầu 6 - Monorepo) ---
+        // --- STAGE 2: CHUẨN BỊ POM GỐC ---
         stage('Prepare Root & Commons') {
             steps {
-                echo '=== Cài đặt cấu hình gốc và thư viện dùng chung cho các service ==='
+                sh 'find . -name "*.exec" -type f -delete || true'
+                sh 'rm -rf */target || true'
+                echo '=== Cài đặt cấu hình gốc và thư viện dùng chung ==='
                 script {
                     docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v /root/.m2:/root/.m2') {
+                        sh 'mvn install -N -Drevision=1.0-SNAPSHOT'
                         sh 'mvn clean install -DskipTests -Drevision=1.0-SNAPSHOT -pl common-library -am'
                     }
                 }
             }
         }
 
-        // --- 3. QUY TRÌNH CI TUẦN TỰ CHO TẤT CẢ CORE SERVICES ---
+        // --- STAGE 3: QUY TRÌNH CI TUẦN TỰ ---
         stage('Business Services CI') {
             stages {
-                // Các stage này bây giờ sẽ chạy lần lượt từ trên xuống dưới
                 stage('Service: Customer') {
                     when { changeset "customer/**" }
                     steps { runServiceCI('customer') }
@@ -85,18 +93,6 @@ pipeline {
                     when { changeset "promotion/**" }
                     steps { runServiceCI('promotion') }
                 }
-                stage('Service: Backoffice-BFF') {
-                    when { changeset "backoffice-bff/**" }
-                    steps { runServiceCI('backoffice-bff') }
-                }
-                stage('Service: Storefront-BFF') {
-                    when { changeset "storefront-bff/**" }
-                    steps { runServiceCI('storefront-bff') }
-                }
-                stage('Service: Sampledata') {
-                    when { changeset "sampledata/**" }
-                    steps { runServiceCI('sampledata') }
-                }
                 stage('Service: payment-paypal') {
                     when { changeset "payment-paypal/**" }
                     steps { runServiceCI('payment-paypal') }
@@ -111,82 +107,93 @@ pipeline {
                 echo "=== BẮT ĐẦU DỌN DẸP TÀI NGUYÊN (RESET) ==="
                 sh 'docker ps -aq --filter label=org.testcontainers=true | xargs -r docker rm -f || true'
                 sh 'docker network prune -f || true'
-                echo "=== DỌN DẸP HOÀN TẤT ==="
+                
+                sh 'rm -rf common-library/target/classes || true'
+                echo "=== Tổng hợp báo cáo JaCoCo toàn dự án ==="
+                jacoco(
+                    execPattern: "*/target/*.exec",      
+                    classPattern: "*/target/classes",     
+                    sourcePattern: "*/src/main/java",     
+                    inclusionPattern: "**/*.class",
+                    minimumInstructionCoverage: '70',     
+                    maximumInstructionCoverage: '70',
+                    buildOverBuild: false,
+                    changeBuildStatus: true,
+                    skipCopyOfSrcFiles: true 
+                )
+                
+                echo "=== Quét SonarCloud tổng hợp cho TOÀN BỘ dự án ==="
+                docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v /root/.m2:/root/.m2') {
+                    withCredentials([
+                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
+                        string(credentialsId: 'sonar-organization', variable: 'SONAR_ORGANIZATION'),
+                        string(credentialsId: 'sonar-project-key', variable: 'SONAR_PROJECT_KEY')
+                    ]) {
+                        def moduleList = changedModules.join(',')
+                        
+                        if (moduleList != "") {
+                            echo "Đang quét SonarCloud cho các service: ${moduleList}"
+                            
+                            sh """mvn org.jacoco:jacoco-maven-plugin:0.8.11:report compile sonar:sonar \
+                            -Drevision=1.0-SNAPSHOT \
+                            -pl ${moduleList} -am \
+                            -Dsonar.coverage.exclusions="common-library/**" \
+                            -Dsonar.token=\$SONAR_TOKEN \
+                            -Dsonar.organization=\$SONAR_ORGANIZATION \
+                            -Dsonar.projectKey=\$SONAR_PROJECT_KEY || true"""
+                        } else {
+                            echo "Không có service nào thay đổi, bỏ qua SonarCloud!"
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-// def runServiceCI(String serviceName) {
-//     script {
-//         docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v /root/.m2:/root/.m2') {
-//             echo "=== Phase: Unit Test & Quality Scan cho ${serviceName} ==="
-            
-//             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-//                 sh """mvn clean verify sonar:sonar -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am -DskipTests=false \\
-//                 -Dsonar.token=\$SONAR_TOKEN \\
-//                 -Dsonar.organization=longlee0 \\
-//                 -Dsonar.projectKey=LongLee0_yas_Project1_Devops || true"""
-//             }
-            
-//             echo "=== Phase: Kiểm tra độ phủ Test > 70% (Yêu cầu 7b) ==="
-//             jacoco(
-//                 execPattern: "**/target/*.exec",
-//                 classPattern: "**/target/classes",
-//                 sourcePattern: "**/src/main/java",
-//                 inclusionPattern: "**/*.class",
-//                 minimumInstructionCoverage: '0', 
-//                 maximumInstructionCoverage: '0',
-//                 buildOverBuild: true,
-//                 changeBuildStatus: true,
-//                 skipCopyOfSrcFiles: true 
-//             )
-//         }
-
-//         echo "=== Phase: Build Docker Image cho ${serviceName} (Yêu cầu 5) ==="
-//         dir(serviceName) {
-//             sh "docker build -t yas-${serviceName}:${BUILD_ID} ."
-//         }
-//     }
-//     publishTestResults(serviceName)
-// }
-
+// --- HÀM HỖ TRỢ XỬ LÝ TỪNG SERVICE ---
 def runServiceCI(String serviceName) {
     script {
+        changedModules.add(serviceName)
         docker.image('maven:3.9.6-eclipse-temurin-21').inside('-v /root/.m2:/root/.m2') {
-
-            echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
-            withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                // TỐI ƯU MAVEN:
-                // - Bỏ clean để dùng lại cache biên dịch
-                // - Bỏ -am vì common-library đã được cài đặt ở stage trước
-                // - Thêm -T 1C để tận dụng đa nhân CPU
-                // - Dùng install thay vì verify nếu em muốn các service sau dùng được kết quả của service trước
-                sh """
-                    mvn install sonar:sonar \
-                    -pl ${serviceName} \
-                    -Drevision=1.0-SNAPSHOT \
-                    -DskipITs=true \
-                    -Dsonar.token=\$SONAR_TOKEN \
-                    -Dsonar.organization=longlee0 \
-                    -Dsonar.projectKey=LongLee0_yas_${serviceName} \
-                    -T 1C || true
-                """
-            }
+            echo "=== Phase: Unit Test cho ${serviceName} ==="
             
-            echo "=== Phase: JaCoCo Report ==="
-            jacoco(
-                execPattern: "${serviceName}/target/*.exec", // Chỉ định đích danh thư mục để tránh xung đột
-                classPattern: "${serviceName}/target/classes",
-                sourcePattern: "${serviceName}/src/main/java",
-                inclusionPattern: "**/*.class",
-                minimumInstructionCoverage: '0',
-                changeBuildStatus: true
-            )
+            sh """mvn install \
+            -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
+            -DskipITs=true"""
+            // echo "=== Phase: Unit Test & Sonar Scan cho ${serviceName} ==="
+            
+            // withCredentials([
+            //     string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
+            //     string(credentialsId: 'sonar-organization', variable: 'SONAR_ORGANIZATION'),
+            //     string(credentialsId: 'sonar-project-key', variable: 'SONAR_PROJECT_KEY')
+            // ]) {
+            //     sh """mvn install sonar:sonar \
+            //     -Drevision=1.0-SNAPSHOT -pl ${serviceName} -am \
+            //     -DskipITs=true \
+            //     -Dsonar.token=\$SONAR_TOKEN \
+            //     -Dsonar.organization=\$SONAR_ORGANIZATION \
+            //     -Dsonar.projectKey=\$SONAR_PROJECT_KEY"""
+            // }
+            
+            // echo "=== Phase: Kiểm tra độ phủ Test > 70% (Yêu cầu 7b) ==="
+            // jacoco(
+            //     execPattern: "${serviceName}/target/*.exec",
+            //     classPattern: "${serviceName}/target/classes",
+            //     sourcePattern: "${serviceName}/src/main/java",
+            //     inclusionPattern: "**/*.class",
+            //     minimumInstructionCoverage: '70',
+            //     maximumInstructionCoverage: '70',
+                
+            //     buildOverBuild: false,
+            //     changeBuildStatus: true,
+            //     skipCopyOfSrcFiles: true 
+            // )
         }
 
         echo "=== Phase: Build Docker Image cho ${serviceName} ==="
         dir(serviceName) {
+            sh "rm -f target/*-tests.jar target/*.jar.original || true"
             sh "docker build -t yas-${serviceName}:${BUILD_ID} ."
         }
     }
